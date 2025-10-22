@@ -33,8 +33,9 @@ type GIFEncoder struct {
 	palSize       int         // color table size (bits-1)
 	dispose       int         // disposal code (-1 = use default)
 	firstFrame    bool
-	sample        int  // default sample interval for quantizer
-	dither        bool // default dithering
+	sample        int          // default sample interval for quantizer
+	ditherMethod  DitherMethod // dithering method
+	serpentine    bool         // serpentine scanning for dithering
 	globalPalette []byte
 
 	out *ByteArray
@@ -43,22 +44,22 @@ type GIFEncoder struct {
 // NewGIFEncoder creates a new GIF encoder
 func NewGIFEncoder(width, height int) *GIFEncoder {
 	return &GIFEncoder{
-		width:      width,
-		height:     height,
-		repeat:     -1,
-		delay:      0,
-		dispose:    -1,
-		firstFrame: true,
-		sample:     10,
-		dither:     false,
-		palSize:    7,
-		out:        NewByteArray(),
-		usedEntry:  make([]bool, 256),
+		width:        width,
+		height:       height,
+		repeat:       -1,
+		delay:        0,
+		dispose:      -1,
+		firstFrame:   true,
+		sample:       10,
+		ditherMethod: DitherNone,
+		serpentine:   false,
+		palSize:      7,
+		out:          NewByteArray(),
+		usedEntry:    make([]bool, 256),
 	}
 }
 
 // SetDelay sets the delay time between each frame, or changes it for subsequent frames
-// (applies to last frame added)
 func (ge *GIFEncoder) SetDelay(milliseconds int) {
 	ge.delay = milliseconds / 10
 }
@@ -68,8 +69,7 @@ func (ge *GIFEncoder) SetFrameRate(fps int) {
 	ge.delay = 100 / fps
 }
 
-// SetDispose sets the GIF frame disposal code for the last added frame and any subsequent frames
-// Default is 0 if no transparent color has been set, otherwise 2.
+// SetDispose sets the GIF frame disposal code
 func (ge *GIFEncoder) SetDispose(disposalCode int) {
 	if disposalCode >= 0 {
 		ge.dispose = disposalCode
@@ -77,26 +77,16 @@ func (ge *GIFEncoder) SetDispose(disposalCode int) {
 }
 
 // SetRepeat sets the number of times the set of GIF frames should be played
-// -1 = play once
-// 0 = repeat indefinitely
-// Default is -1
-// Must be invoked before the first image is added
 func (ge *GIFEncoder) SetRepeat(repeat int) {
 	ge.repeat = repeat
 }
 
-// SetTransparent sets the transparent color for the last added frame and any subsequent frames
-// Since all colors are subject to modification in the quantization process, the color in the
-// final palette for each frame closest to the given color becomes the transparent color for that frame.
-// May be set to nil to indicate no transparent color.
+// SetTransparent sets the transparent color
 func (ge *GIFEncoder) SetTransparent(c *color.RGBA) {
 	ge.transparent = c
 }
 
-// SetQuality sets quality of color quantization (conversion of images to the maximum 256
-// colors allowed by the GIF specification). Lower values (minimum = 1) produce better colors,
-// but slow processing significantly. 10 is the default, and produces good color mapping at
-// reasonable speeds. Values greater than 20 do not yield significant improvements in speed.
+// SetQuality sets quality of color quantization (1-30, lower is better)
 func (ge *GIFEncoder) SetQuality(quality int) {
 	if quality < 1 {
 		quality = 1
@@ -104,19 +94,52 @@ func (ge *GIFEncoder) SetQuality(quality int) {
 	ge.sample = quality
 }
 
-// SetDither sets dithering method. Available are:
-// - false: no dithering
-// - true or "FloydSteinberg"
-// - "FalseFloydSteinberg"
-// - "Stucki"
-// - "Atkinson"
-func (ge *GIFEncoder) SetDither(dither bool) {
-	ge.dither = dither
+// SetDither sets dithering method. Available methods:
+// - "none" or "" or false: no dithering
+// - "FloydSteinberg" or true: Floyd-Steinberg dithering (recommended)
+// - "FalseFloydSteinberg": False Floyd-Steinberg dithering
+// - "Stucki": Stucki dithering
+// - "Atkinson": Atkinson dithering
+// Add "-serpentine" suffix to use serpentine scanning (e.g., "FloydSteinberg-serpentine")
+func (ge *GIFEncoder) SetDither(method interface{}) {
+	ge.serpentine = false
+
+	switch v := method.(type) {
+	case bool:
+		if v {
+			ge.ditherMethod = DitherFloydSteinberg
+		} else {
+			ge.ditherMethod = DitherNone
+		}
+	case string:
+		// 检查是否有 serpentine 后缀
+		if len(v) > 11 && v[len(v)-11:] == "-serpentine" {
+			ge.serpentine = true
+			v = v[:len(v)-11]
+		}
+
+		switch v {
+		case "FloydSteinberg":
+			ge.ditherMethod = DitherFloydSteinberg
+		case "FalseFloydSteinberg":
+			ge.ditherMethod = DitherFalseFloydSteinberg
+		case "Stucki":
+			ge.ditherMethod = DitherStucki
+		case "Atkinson":
+			ge.ditherMethod = DitherAtkinson
+		case "none", "":
+			ge.ditherMethod = DitherNone
+		default:
+			ge.ditherMethod = DitherNone
+		}
+	case DitherMethod:
+		ge.ditherMethod = v
+	default:
+		ge.ditherMethod = DitherNone
+	}
 }
 
 // SetGlobalPalette sets global palette for all frames
-// You can provide nil to create global palette from first picture
-// Or a byte array of r,g,b,r,g,b,...
 func (ge *GIFEncoder) SetGlobalPalette(palette []byte) {
 	ge.globalPalette = palette
 }
@@ -131,9 +154,7 @@ func (ge *GIFEncoder) GetGlobalPalette() []byte {
 	return nil
 }
 
-// AddFrame adds next GIF frame. The frame is not written immediately, but is
-// actually deferred until the next frame is received so that timing
-// data can be inserted. Invoking Finish() flushes all frames.
+// AddFrame adds next GIF frame
 func (ge *GIFEncoder) AddFrame(img image.Image) error {
 	ge.image = img
 
@@ -151,7 +172,6 @@ func (ge *GIFEncoder) AddFrame(img image.Image) error {
 		ge.writeLSD()     // logical screen descriptor
 		ge.writePalette() // global color table
 		if ge.repeat >= 0 {
-			// use NS app extension to indicate reps
 			ge.writeNetscapeExt()
 		}
 	}
@@ -169,8 +189,7 @@ func (ge *GIFEncoder) AddFrame(img image.Image) error {
 	return nil
 }
 
-// Finish adds final trailer to the GIF stream, if you don't call the finish method
-// the GIF stream will not be valid.
+// Finish adds final trailer to the GIF stream
 func (ge *GIFEncoder) Finish() {
 	ge.out.WriteByte(0x3b) // gif trailer
 }
@@ -199,10 +218,11 @@ func (ge *GIFEncoder) analyzePixels() {
 	}
 
 	// map image pixels to new palette
-	if ge.dither {
-		// TODO: implement dithering
-		ge.indexPixels()
+	if ge.ditherMethod != DitherNone {
+		// 使用抖动
+		ge.ditherPixels(ge.ditherMethod, ge.serpentine)
 	} else {
+		// 不使用抖动
 		ge.indexPixels()
 	}
 
@@ -271,19 +291,40 @@ func (ge *GIFEncoder) findClosestRGB(r, g, b byte) int {
 	return minpos
 }
 
-// getImagePixels extracts image pixels into byte array pixels
-// (removes alpha channel from image data)
+// getImagePixels extracts image pixels into byte array
 func (ge *GIFEncoder) getImagePixels() {
 	w := ge.width
 	h := ge.height
+
 	ge.pixels = make([]byte, w*h*3)
 
 	bounds := ge.image.Bounds()
+
+	minX := bounds.Min.X
+	minY := bounds.Min.Y
+	maxX := bounds.Max.X
+	maxY := bounds.Max.Y
+
+	availWidth := maxX - minX
+	availHeight := maxY - minY
+
+	if availWidth != w || availHeight != h {
+		// 使用较小的尺寸避免越界
+		if availWidth < w {
+			w = availWidth
+		}
+		if availHeight < h {
+			h = availHeight
+		}
+	}
+
 	count := 0
 
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
-			r, g, b, _ := ge.image.At(bounds.Min.X+x, bounds.Min.Y+y).RGBA()
+			r, g, b, _ := ge.image.At(minX+x, minY+y).RGBA()
+
+			// RGBA() 返回 0-65535 的值，需要转换为 0-255
 			ge.pixels[count] = byte(r >> 8)
 			count++
 			ge.pixels[count] = byte(g >> 8)
@@ -291,6 +332,13 @@ func (ge *GIFEncoder) getImagePixels() {
 			ge.pixels[count] = byte(b >> 8)
 			count++
 		}
+	}
+
+	// 如果实际读取的像素少于预期，用黑色填充剩余部分
+	expectedSize := ge.width * ge.height * 3
+	for count < expectedSize {
+		ge.pixels[count] = 255
+		count++
 	}
 }
 
@@ -378,7 +426,7 @@ func (ge *GIFEncoder) writeNetscapeExt() {
 	ge.out.WriteUTFBytes("NETSCAPE2.0") // app id + auth code
 	ge.out.WriteByte(3)                 // sub-block size
 	ge.out.WriteByte(1)                 // loop sub-block id
-	ge.writeShort(ge.repeat)            // loop count (extra iterations, 0=repeat forever)
+	ge.writeShort(ge.repeat)            // loop count
 	ge.out.WriteByte(0)                 // block terminator
 }
 

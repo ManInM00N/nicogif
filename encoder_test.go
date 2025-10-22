@@ -303,7 +303,7 @@ func TestEncodeWithOptions(t *testing.T) {
 		Width:   20,
 		Height:  20,
 		Repeat:  0,
-		Quality: 10,
+		Quality: 1,
 		Delays:  []int{100, 100, 100},
 	}
 

@@ -1,5 +1,29 @@
 package gifencoder
 
+/*
+NeuQuant Neural-Net Quantization Algorithm
+------------------------------------------
+
+Copyright (c) 1994 Anthony Dekker
+
+NEUQUANT Neural-Net quantization algorithm by Anthony Dekker, 1994.
+See "Kohonen neural networks for optimal colour quantization"
+in "Network: Computation in Neural Systems" Vol. 5 (1994) pp 351-367.
+for a discussion of the algorithm.
+See also http://members.ozemail.com.au/~dekker/NEUQUANT.HTML
+
+Any party obtaining a copy of these files from the author, directly or
+indirectly, is granted, free of charge, a full and unrestricted irrevocable,
+world-wide, paid up, royalty-free, nonexclusive right and license to deal
+in this software and documentation files (the "Software"), including without
+limitation the rights to use, copy, modify, merge, publish, distribute, sublicense,
+and/or sell copies of the Software, and to permit persons who receive
+copies from any such party to do so, with the only requirement being
+that this copyright notice remain intact.
+
+(Go port 2024)
+*/
+
 const (
 	ncycles         = 100 // number of learning cycles
 	netsize         = 256 // number of colors used
@@ -102,7 +126,9 @@ func (nq *NeuQuant) GetColormap() []byte {
 
 // LookupRGB looks for the closest r, g, b color in the map and returns its index
 func (nq *NeuQuant) LookupRGB(r, g, b byte) int {
-	return nq.inxsearch(int32(b), int32(g), int32(r))
+	// 注意：虽然 inxsearch 的参数名是 (b, g, r)，但实际期望的是 RGB 顺序
+	// 这是原始代码的命名混淆，不要被参数名误导
+	return nq.inxsearch(int32(r), int32(g), int32(b))
 }
 
 // unbiasnet unbiases network to give byte values 0..255 and record position i to prepare for sort
@@ -157,7 +183,7 @@ func (nq *NeuQuant) alterneigh(radius int, i int, b, g, r int32) {
 // finds closest neuron (min dist) and updates freq
 // finds best neuron (min dist-bias) and returns position
 func (nq *NeuQuant) contest(b, g, r int32) int {
-	bestd := int32(0x7FFFFFFF)
+	bestd := int32(0x7FFFFFFF) // math.MaxInt32 = 2147483647
 	bestbiasd := bestd
 	bestpos := -1
 	bestbiaspos := bestpos

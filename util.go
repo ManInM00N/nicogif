@@ -36,13 +36,13 @@ func EncodeGIF(images []image.Image, delays []int) ([]byte, error) {
 
 // EncodeGIFWithOptions provides more control over encoding options
 type EncodeOptions struct {
-	Width         int    // width of output GIF
-	Height        int    // height of output GIF
-	Repeat        int    // -1 = once, 0 = forever, >0 = count
-	Quality       int    // 1-30, lower is better
-	Dither        bool   // enable dithering
-	GlobalPalette []byte // optional global palette
-	Delays        []int  // delays in milliseconds
+	Width         int         // width of output GIF
+	Height        int         // height of output GIF
+	Repeat        int         // -1 = once, 0 = forever, >0 = count
+	Quality       int         // 1-30, lower is better
+	Dither        interface{} // dithering method: bool, string, or DitherMethod
+	GlobalPalette []byte      // optional global palette
+	Delays        []int       // delays in milliseconds
 }
 
 // EncodeGIFWithOptions encodes images with custom options
@@ -76,7 +76,9 @@ func EncodeGIFWithOptions(images []image.Image, opts EncodeOptions) ([]byte, err
 	encoder.SetQuality(quality)
 
 	// Set dither
-	encoder.SetDither(opts.Dither)
+	if opts.Dither != nil {
+		encoder.SetDither(opts.Dither)
+	}
 
 	// Set global palette
 	if opts.GlobalPalette != nil {

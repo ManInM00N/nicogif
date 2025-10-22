@@ -1,5 +1,29 @@
 package gifencoder
 
+/*
+LZWEncoder.go
+
+Authors
+Kevin Weiner (original Java version - kweiner@fmsware.com)
+Thibault Imbert (AS3 version - bytearray.org)
+Johan Nordberg (JS version - code@johan-nordberg.com)
+
+Acknowledgements
+GIFCOMPR.C - GIF Image compression routines
+Lempel-Ziv compression based on 'compress'. GIF modifications by
+David Rowley (mgardi@watdcsu.waterloo.edu)
+GIF Image compression - modified 'compress'
+Based on: compress.c - File compression ala IEEE Computer, June 1984.
+By Authors: Spencer W. Thomas (decvax!harpo!utah-cs!utah-gr!thomas)
+Jim McKie (decvax!mcvax!jim)
+Steve Davies (decvax!vax135!petsd!peora!srd)
+Ken Turkowski (decvax!decwrl!turtlevax!ken)
+James A. Woods (decvax!ihnp4!ames!jaw)
+Joe Orost (decvax!vax135!petsd!joe)
+
+(Go port 2024)
+*/
+
 const (
 	EOF   = -1
 	BITS  = 12
@@ -59,63 +83,42 @@ func (enc *LZWEncoder) nextPixel() int {
 	return int(pix) & 0xff
 }
 
+// MAXCODE returns the maximum code value for n bits
+func MAXCODE(nBits int) int {
+	return (1 << nBits) - 1
+}
+
 // compress performs LZW compression
 func (enc *LZWEncoder) compress(initBits int, out *ByteArray) {
 	var (
 		fcode    int
 		c        int
+		i        int
 		ent      int
 		disp     int
-		hshift   int
 		hsizeReg int
-
-		gInitBits int
-		clearCode int
-		eofCode   int
-		freeEnt   int
-		clearFlg  bool
-		nBits     int
-		maxcode   int
-
-		curAccum int
-		curBits  int
-		aCount   int
-
-		accum   [256]byte
-		htab    [HSIZE]int
-		codetab [HSIZE]int
+		hshift   int
 	)
 
-	// Set up the globals: gInitBits - initial number of bits
-	gInitBits = initBits
+	// 这些变量需要在闭包中共享和修改
+	gInitBits := initBits
+	clearFlg := false
+	nBits := gInitBits
+	maxcode := MAXCODE(nBits)
 
-	// Set up the necessary values
-	clearFlg = false
-	nBits = gInitBits
-	maxcode = maxCode(nBits)
+	clearCode := 1 << (initBits - 1)
+	eofCode := clearCode + 1
+	freeEnt := clearCode + 2
 
-	clearCode = 1 << (initBits - 1)
-	eofCode = clearCode + 1
-	freeEnt = clearCode + 2
+	aCount := 0
+	curAccum := 0
+	curBits := 0
 
-	aCount = 0 // clear packet
+	accum := make([]byte, 256)
+	htab := make([]int, HSIZE)
+	codetab := make([]int, HSIZE)
 
-	ent = enc.nextPixel()
-
-	hshift = 0
-	for fcode = HSIZE; fcode < 65536; fcode *= 2 {
-		hshift++
-	}
-	hshift = 8 - hshift // set hash code range bound
-
-	hsizeReg = HSIZE
-	clHash := func(hsize int) {
-		for i := 0; i < hsize; i++ {
-			htab[i] = -1
-		}
-	}
-	clHash(hsizeReg) // clear hash table
-
+	// Flush the packet to disk, and reset the accumulator
 	flushChar := func() {
 		if aCount > 0 {
 			out.WriteByte(byte(aCount))
@@ -124,6 +127,7 @@ func (enc *LZWEncoder) compress(initBits int, out *ByteArray) {
 		}
 	}
 
+	// Add a character to the end of the current packet
 	charOut := func(c byte) {
 		accum[aCount] = c
 		aCount++
@@ -132,7 +136,15 @@ func (enc *LZWEncoder) compress(initBits int, out *ByteArray) {
 		}
 	}
 
-	output := func(code int) {
+	// Clear out the hash table
+	clHash := func(hsize int) {
+		for i := 0; i < hsize; i++ {
+			htab[i] = -1
+		}
+	}
+
+	var output func(int)
+	output = func(code int) {
 		curAccum &= masks[curBits]
 
 		if curBits > 0 {
@@ -153,15 +165,16 @@ func (enc *LZWEncoder) compress(initBits int, out *ByteArray) {
 		// then increase it, if possible.
 		if freeEnt > maxcode || clearFlg {
 			if clearFlg {
-				maxcode = maxCode(nBits)
+				// 修复：先赋值再计算 maxcode
 				nBits = gInitBits
+				maxcode = MAXCODE(nBits)
 				clearFlg = false
 			} else {
 				nBits++
 				if nBits == BITS {
 					maxcode = 1 << BITS
 				} else {
-					maxcode = maxCode(nBits)
+					maxcode = MAXCODE(nBits)
 				}
 			}
 		}
@@ -177,12 +190,25 @@ func (enc *LZWEncoder) compress(initBits int, out *ByteArray) {
 		}
 	}
 
+	// table clear for block compress
 	clBlock := func() {
 		clHash(HSIZE)
 		freeEnt = clearCode + 2
 		clearFlg = true
 		output(clearCode)
 	}
+
+	// Set up the necessary values
+	ent = enc.nextPixel()
+
+	hshift = 0
+	for fcode = HSIZE; fcode < 65536; fcode *= 2 {
+		hshift++
+	}
+	hshift = 8 - hshift // set hash code range bound
+
+	hsizeReg = HSIZE
+	clHash(hsizeReg) // clear hash table
 
 	output(clearCode)
 
@@ -194,7 +220,7 @@ outerLoop:
 		}
 
 		fcode = (c << BITS) + ent
-		i := (c << hshift) ^ ent // xor hashing
+		i = (c << hshift) ^ ent // xor hashing
 
 		if htab[i] == fcode {
 			ent = codetab[i]
@@ -237,9 +263,4 @@ outerLoop:
 	// Put out the final code.
 	output(ent)
 	output(eofCode)
-}
-
-// maxCode returns the maximum code value for n bits
-func maxCode(nBits int) int {
-	return (1 << nBits) - 1
 }
