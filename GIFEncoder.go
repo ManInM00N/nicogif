@@ -23,20 +23,22 @@ type GIFEncoder struct {
 	// frame delay (hundredths)
 	delay int
 
-	image         image.Image // current frame
-	pixels        []byte      // RGB byte array from frame
-	indexedPixels []byte      // converted frame indexed to palette
-	colorDepth    int         // number of bit planes
-	colorTab      []byte      // RGB palette
-	neuQuant      *NeuQuant   // NeuQuant instance that was used to generate colorTab
-	usedEntry     []bool      // active palette entries
-	palSize       int         // color table size (bits-1)
-	dispose       int         // disposal code (-1 = use default)
-	firstFrame    bool
-	sample        int          // default sample interval for quantizer
-	ditherMethod  DitherMethod // dithering method
-	serpentine    bool         // serpentine scanning for dithering
-	globalPalette []byte
+	image           image.Image // current frame
+	pixels          []byte      // RGB byte array from frame
+	indexedPixels   []byte      // converted frame indexed to palette
+	colorDepth      int         // number of bit planes
+	colorTab        []byte      // RGB palette
+	neuQuant        *NeuQuant   // NeuQuant instance that was used to generate colorTab
+	usedEntry       []bool      // active palette entries
+	palSize         int         // color table size (bits-1)
+	dispose         int         // disposal code (-1 = use default)
+	firstFrame      bool
+	sample          int          // default sample interval for quantizer
+	ditherMethod    DitherMethod // dithering method
+	serpentine      bool         // serpentine scanning for dithering
+	saturationBoost float64      // 饱和度增强
+	contrastBoost   float64      // 对比度增强
+	globalPalette   []byte
 
 	out *ByteArray
 }
@@ -142,6 +144,14 @@ func (ge *GIFEncoder) SetDither(method interface{}) {
 // SetGlobalPalette sets global palette for all frames
 func (ge *GIFEncoder) SetGlobalPalette(palette []byte) {
 	ge.globalPalette = palette
+}
+
+// SetColorEnhancement 设置颜色增强选项
+// saturationBoost: 饱和度 ([0.0,2.0], 1.0为原始)
+// contrastBoost: 对比度 ([0.0,2.0], 1.0为原始)
+func (ge *GIFEncoder) SetColorEnhancement(saturationBoost, contrastBoost float64) {
+	ge.saturationBoost = saturationBoost
+	ge.contrastBoost = contrastBoost
 }
 
 // GetGlobalPalette returns global palette used for all frames
@@ -318,18 +328,29 @@ func (ge *GIFEncoder) getImagePixels() {
 		}
 	}
 
+	// 是否启用颜色增强
+	enhanceColors := ge.saturationBoost != 1.0 || ge.contrastBoost != 1.0
+
 	count := 0
 
 	for y := 0; y < h; y++ {
 		for x := 0; x < w; x++ {
 			r, g, b, _ := ge.image.At(minX+x, minY+y).RGBA()
 
-			// RGBA() 返回 0-65535 的值，需要转换为 0-255
-			ge.pixels[count] = byte(r >> 8)
+			// 转换为0-255
+			r8 := byte(r >> 8)
+			g8 := byte(g >> 8)
+			b8 := byte(b >> 8)
+
+			if enhanceColors {
+				r8, g8, b8 = enhanceColor(r8, g8, b8, ge.saturationBoost, ge.contrastBoost)
+			}
+
+			ge.pixels[count] = r8
 			count++
-			ge.pixels[count] = byte(g >> 8)
+			ge.pixels[count] = g8
 			count++
-			ge.pixels[count] = byte(b >> 8)
+			ge.pixels[count] = b8
 			count++
 		}
 	}
@@ -340,6 +361,66 @@ func (ge *GIFEncoder) getImagePixels() {
 		ge.pixels[count] = 255
 		count++
 	}
+}
+
+func enhanceColor(r, g, b byte, satBoost, contrastBoost float64) (byte, byte, byte) {
+	rf := float64(r) / 255.0
+	gf := float64(g) / 255.0
+	bf := float64(b) / 255.0
+
+	// 应用对比度
+	if contrastBoost != 1.0 {
+		rf = (rf-0.5)*contrastBoost + 0.5
+		gf = (gf-0.5)*contrastBoost + 0.5
+		bf = (bf-0.5)*contrastBoost + 0.5
+	}
+
+	// 应用饱和度
+	if satBoost != 1.0 {
+		// 转换到HSL
+		max := maxFloat(rf, gf, bf)
+		min := minFloat(rf, gf, bf)
+		l := (max + min) / 2.0
+
+		if max != min {
+			var h, s float64
+			d := max - min
+
+			if l > 0.5 {
+				s = d / (2.0 - max - min)
+			} else {
+				s = d / (max + min)
+			}
+
+			// 计算色调
+			switch max {
+			case rf:
+				h = (gf - bf) / d
+				if gf < bf {
+					h += 6.0
+				}
+			case gf:
+				h = (bf-rf)/d + 2.0
+			case bf:
+				h = (rf-gf)/d + 4.0
+			}
+			h /= 6.0
+
+			// 提升饱和度
+			s *= satBoost
+			if s > 1.0 {
+				s = 1.0
+			}
+
+			// 转换回RGB
+			rf, gf, bf = hslToRGB(h, s, l)
+		}
+	}
+
+	// 限制在0-255范围
+	return clampFloat(rf * 255.0),
+		clampFloat(gf * 255.0),
+		clampFloat(bf * 255.0)
 }
 
 // writeGraphicCtrlExt writes Graphic Control Extension
