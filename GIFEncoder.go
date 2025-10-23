@@ -195,6 +195,13 @@ func (ge *GIFEncoder) AddFrame(img image.Image) error {
 
 	ge.writePixels() // encode and write pixel data
 
+	// gc
+	ge.indexedPixels = nil
+	ge.image = nil
+	if ge.globalPalette == nil && !ge.firstFrame {
+		ge.colorTab = nil
+	}
+
 	ge.firstFrame = false
 	return nil
 }
@@ -202,6 +209,7 @@ func (ge *GIFEncoder) AddFrame(img image.Image) error {
 // Finish adds final trailer to the GIF stream
 func (ge *GIFEncoder) Finish() {
 	ge.out.WriteByte(0x3b) // gif trailer
+	ge.Cleanup()
 }
 
 // GetData retrieves the GIF stream as byte array
@@ -225,6 +233,11 @@ func (ge *GIFEncoder) analyzePixels() {
 		ge.neuQuant = NewNeuQuant(ge.pixels, ge.sample)
 		ge.neuQuant.BuildColormap() // create reduced palette
 		ge.colorTab = ge.neuQuant.GetColormap()
+
+		// free pixel array
+		if ge.neuQuant != nil {
+			ge.neuQuant.pixels = nil
+		}
 	}
 
 	// map image pixels to new palette
@@ -530,4 +543,24 @@ func (ge *GIFEncoder) writeShort(value int) {
 func (ge *GIFEncoder) writePixels() {
 	enc := NewLZWEncoder(ge.width, ge.height, ge.indexedPixels, ge.colorDepth)
 	enc.Encode(ge.out)
+}
+
+func (ge *GIFEncoder) Cleanup() {
+	ge.pixels = nil
+	ge.indexedPixels = nil
+	ge.colorTab = nil
+	ge.image = nil
+	ge.neuQuant = nil
+	ge.globalPalette = nil
+	ge.usedEntry = nil
+}
+
+// CleanupAll 完全清理包括输出缓冲区
+// 只在确定不再需要GetData()时调用
+func (ge *GIFEncoder) CleanupAll() {
+	ge.Cleanup()
+	if ge.out != nil {
+		ge.out.pages = nil
+		ge.out = nil
+	}
 }

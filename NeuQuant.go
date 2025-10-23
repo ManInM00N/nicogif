@@ -98,6 +98,10 @@ func (nq *NeuQuant) init() {
 func (nq *NeuQuant) BuildColormap() {
 	nq.init()
 	nq.learn()
+
+	// gc
+	nq.pixels = nil
+
 	nq.unbiasnet()
 	nq.inxbuild()
 }
