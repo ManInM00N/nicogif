@@ -46,18 +46,20 @@ type GIFEncoder struct {
 // NewGIFEncoder creates a new GIF encoder
 func NewGIFEncoder(width, height int) *GIFEncoder {
 	return &GIFEncoder{
-		width:        width,
-		height:       height,
-		repeat:       -1,
-		delay:        0,
-		dispose:      -1,
-		firstFrame:   true,
-		sample:       10,
-		ditherMethod: DitherNone,
-		serpentine:   false,
-		palSize:      7,
-		out:          NewByteArray(),
-		usedEntry:    make([]bool, 256),
+		width:           width,
+		height:          height,
+		repeat:          -1,
+		delay:           0,
+		dispose:         -1,
+		firstFrame:      true,
+		sample:          10,
+		ditherMethod:    DitherNone,
+		serpentine:      false,
+		palSize:         7,
+		saturationBoost: 1.0,
+		contrastBoost:   1.0,
+		out:             NewByteArray(),
+		usedEntry:       make([]bool, 256),
 	}
 }
 

@@ -48,6 +48,40 @@ type EncodeOptions struct {
 	ContrastBoost   float64     // 对比度增强, [0.0,2.0], 1.0为原始
 }
 
+func NewGIFEncoderWithOptions(width, height int, opts EncodeOptions) *GIFEncoder {
+	encoder := NewGIFEncoder(width, height)
+
+	// Set repeat
+	if opts.Repeat != 0 {
+		encoder.SetRepeat(opts.Repeat)
+	} else {
+		encoder.SetRepeat(0) // default to loop forever
+	}
+
+	// Set quality
+	quality := opts.Quality
+	if quality == 0 {
+		quality = 10 // default
+	}
+	encoder.SetQuality(quality)
+
+	// Set dither
+	if opts.Dither != nil {
+		encoder.SetDither(opts.Dither)
+	}
+
+	// Set color enhancement
+	opts.ContrastBoost = minFloat(2.0, maxFloat(1.0, opts.ContrastBoost))
+	opts.SaturationBoost = minFloat(2.0, maxFloat(1.0, opts.SaturationBoost))
+	encoder.SetColorEnhancement(opts.SaturationBoost, opts.ContrastBoost)
+
+	// Set global palette
+	if opts.GlobalPalette != nil {
+		encoder.SetGlobalPalette(opts.GlobalPalette)
+	}
+	return encoder
+}
+
 // EncodeGIFWithOptions encodes images with custom options
 func EncodeGIFWithOptions(images []image.Image, opts EncodeOptions) ([]byte, error) {
 	if len(images) == 0 {
